@@ -33,7 +33,14 @@
       background: #b5651d; border: 0; border-radius: 12px; cursor: pointer;
     }
     button:hover { background: #9c531a; }
+    button:disabled { opacity: .5; cursor: default; }
     #status { margin-top: 1rem; min-height: 1.2rem; color: #7a6a55; font-size: .9rem; }
+    #qr { margin-top: 1.25rem; }
+    #qr img { width: 240px; height: 240px; border-radius: 12px; background: #fff; }
+    #qr p { margin: .6rem 0 0; font-size: .82rem; color: #7a6a55; }
+    .confirmed { color: #2e7d32; font-weight: 700; font-size: 1.35rem; }
+    .confirmed a { display: block; margin-top: .6rem; font-size: .85rem; }
+    [hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -43,27 +50,66 @@
     <p class="price"><span id="price">—</span> <small>USDC</small></p>
     <span class="net" id="net">devnet</span>
     <button id="pay">Pay with USDC</button>
+    <div id="qr" hidden>
+      <img id="qrImg" alt="Solana Pay QR code" />
+      <p>Scan with Phantom (set to Devnet) to pay.</p>
+    </div>
     <p id="status"></p>
   </main>
 
   <script>
-    // M1: just render item + price from the server config. The Pay button is a
-    // placeholder here; the Solana Pay QR flow is wired up in milestone M2.
+    // M2: the human door. Clicking Pay creates an order, shows its Solana Pay QR,
+    // then polls the server until the payment is confirmed on-chain.
+    const $ = (id) => document.getElementById(id);
+    let pollTimer = null;
+
     async function load() {
       try {
         const cfg = await (await fetch('/api/config')).json();
-        document.getElementById('emoji').textContent = cfg.item.emoji;
-        document.getElementById('item').textContent = cfg.item.name;
-        document.getElementById('price').textContent = cfg.priceUsdc.toFixed(2);
-        document.getElementById('net').textContent = cfg.network;
+        $('emoji').textContent = cfg.item.emoji;
+        $('item').textContent = cfg.item.name;
+        $('price').textContent = cfg.priceUsdc.toFixed(2);
+        $('net').textContent = cfg.network;
         document.title = 'ChiyaPay — ' + cfg.item.name;
       } catch (e) {
-        document.getElementById('status').textContent = 'Could not load shop config.';
+        $('status').textContent = 'Could not load shop config.';
       }
     }
-    document.getElementById('pay').addEventListener('click', () => {
-      document.getElementById('status').textContent = 'Payment flow arrives in M2 ☕';
-    });
+
+    async function pay() {
+      $('pay').disabled = true;
+      $('status').textContent = 'Creating order…';
+      try {
+        const order = await (await fetch('/api/order', { method: 'POST' })).json();
+        $('qrImg').src = order.qr;      // server-rendered QR data URL
+        $('qr').hidden = false;
+        $('status').textContent = 'Waiting for payment…';
+        poll(order.orderId);
+      } catch (e) {
+        $('status').textContent = 'Could not create order.';
+        $('pay').disabled = false;
+      }
+    }
+
+    // Poll the order every 2.5s. When the server reports "confirmed", swap the
+    // card to the success state with a devnet explorer link.
+    function poll(orderId) {
+      pollTimer = setInterval(async () => {
+        try {
+          const r = await (await fetch('/api/order/' + orderId)).json();
+          if (r.status === 'confirmed') {
+            clearInterval(pollTimer);
+            $('qr').hidden = true;
+            $('pay').hidden = true;
+            $('status').innerHTML =
+              '<span class="confirmed">Order confirmed ☕' +
+              '<a href="' + r.explorer + '" target="_blank" rel="noreferrer">View on Solana Explorer</a></span>';
+          }
+        } catch (e) { /* transient poll error — keep trying */ }
+      }, 2500);
+    }
+
+    $('pay').addEventListener('click', pay);
     load();
   </script>
 </body>
