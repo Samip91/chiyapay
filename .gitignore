@@ -1,0 +1,13 @@
+# Secrets and local wallets — NEVER commit these (devnet keys still shouldn't live in git).
+.env
+wallet*.json
+*.keypair.json
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Claude Code tooling — local workflow only, not part of the shipped project
+.claude/
+CLAUDE.md
+HOW-TO-USE.md
