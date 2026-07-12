@@ -92,9 +92,20 @@
     }
 
     // Poll the order every 2.5s. When the server reports "confirmed", swap the
-    // card to the success state with a devnet explorer link.
+    // card to the success state with a devnet explorer link. Give up after ~5 min
+    // so an unpaid order (or a dead server) shows a clear message instead of
+    // spinning forever.
     function poll(orderId) {
+      let attempts = 0;
+      const maxAttempts = 120; // 120 * 2.5s = 5 minutes
       pollTimer = setInterval(async () => {
+        if (++attempts > maxAttempts) {
+          clearInterval(pollTimer);
+          $('status').textContent = 'Payment not detected — click Pay to try again.';
+          $('qr').hidden = true;
+          $('pay').disabled = false;
+          return;
+        }
         try {
           const r = await (await fetch('/api/order/' + orderId)).json();
           if (r.status === 'confirmed') {

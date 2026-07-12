@@ -70,6 +70,9 @@ app.get('/api/order/:id', async (req, res) => {
   } catch (err) {
     // A found-but-invalid payment (wrong amount/mint) keeps the order pending,
     // with a reason for debugging. Real confirmations simply arrive on a later poll.
+    // Log server-side too, so a sustained RPC failure is distinguishable from a
+    // customer who simply hasn't paid yet (both look like "pending" to the client).
+    console.warn(`order ${req.params.id} still pending: ${err.message}`);
     return res.json({ status: 'pending', reason: err.message });
   }
 });
