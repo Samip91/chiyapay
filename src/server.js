@@ -12,6 +12,7 @@ import QRCode from 'qrcode';
 import { Keypair } from '@solana/web3.js';
 import { PORT, ITEM, PRICE_USDC, NETWORK, MERCHANT, USDC_MINT } from './config.js';
 import { buildPaymentUrl, findPayment, confirmPayment, explorerTx } from './solana.js';
+import { verifyPayment } from './verify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, '..', 'public');
@@ -101,6 +102,39 @@ app.get('/api/order/:id', async (req, res) => {
     console.warn(`order ${req.params.id} still pending: ${err.message}`);
     return res.json({ status: 'pending', reason: err.message });
   }
+});
+
+// Agent door — retry endpoint (M4). The agent paid off-chain and now submits its
+// transaction signature in the X-Payment-Signature header. We verify it on-chain
+// (server-side, never trusting the client) and confirm the order, or answer 402
+// again with the reason so the agent can react.
+app.post('/api/order/:orderId/pay', async (req, res) => {
+  const order = orders.get(req.params.orderId);
+  if (!order) return res.status(404).json({ error: 'unknown order' });
+
+  // Idempotent: if this order is already settled, just return the result.
+  if (order.status === 'confirmed') {
+    return res.json({
+      status: 'confirmed',
+      signature: order.signature,
+      explorer: explorerTx(order.signature),
+    });
+  }
+
+  const signature = req.get('X-Payment-Signature');
+  if (!signature) {
+    return res.status(402).json({ status: 'unpaid', reason: 'missing X-Payment-Signature header' });
+  }
+
+  const result = await verifyPayment(signature, order.reference);
+  if (!result.ok) {
+    // Verification failed — stay unpaid and tell the agent why (402 Payment Required).
+    return res.status(402).json({ status: 'unpaid', reason: result.reason });
+  }
+
+  order.status = 'confirmed';
+  order.signature = signature;
+  return res.json({ status: 'confirmed', signature, explorer: explorerTx(signature) });
 });
 
 // Serve the shop page and static assets from /public.

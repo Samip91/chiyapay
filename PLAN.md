@@ -76,11 +76,22 @@ Orders + used-signatures kept **in-memory** (Map/Set) — no database.
   decimals + retryUrl per its suggestions). No on-chain payment needed for M3.
 - Note: M4 must implement `POST /api/order/:orderId/pay` (verify X-Payment-Signature on-chain).
 
-**M4 — Server-side tx verification**
+**M4 — Server-side tx verification** ⏳ CODE COMPLETE + REVIEW: PASS — confirm/underpay/replay paths PENDING devnet funding
 - Done when: verify.js checks (1) tx exists / no `meta.err`; (2) recipient token-balance
   delta ≥ price AND mint matches; (3) blockTime within ~10 min; (4) signature not reused.
   Fail → 402 + reason.
 - Prove: known-good sig → confirmed; reused/wrong-amount sig → 402 with reason.
+- Built: src/verify.js (verifyPayment — 5 checks incl. reference binding + atomic replay
+  claim); POST /api/order/:orderId/pay (verifies X-Payment-Signature on-chain, 402+reason
+  on fail, idempotent confirm, 404 unknown). solana-reviewer: PASS (fixed a concurrent-replay
+  TOCTOU blocker; added v0 ALT loadedAddresses handling).
+- Proven headlessly against REAL devnet reads: no-sig → 402 "missing header"; garbage sig →
+  402 "transaction not found"; a real recent (1–8s old) unrelated devnet tx → 402 "no USDC
+  transfer to the merchant" (this exercises checks 1–4 on real chain data); unknown order → 404.
+- NOT yet proven: known-good → confirmed, underpay → 402, on-chain replay → 402 — all need a
+  real ≥0.1 USDC payment TO the merchant, BLOCKED (devnet airdrop faucets dry, Circle USDC
+  faucet is web-only). Finish when faucets recover / a wallet is funded. DO NOT mark ✅ until
+  a real payment confirms an order and a reused/underpaid sig is rejected on-chain.
 
 **M5 — Agent script full flow**
 - Done when: `npm run agent` does 402 → send USDC transfer (create ATA if needed) →
