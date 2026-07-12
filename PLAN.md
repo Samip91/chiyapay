@@ -49,10 +49,21 @@ Orders + used-signatures kept **in-memory** (Map/Set) — no database.
   `curl localhost:3000/api/config` → `{"item":{"name":"Nepali Milk Chiya","emoji":"☕"},"priceUsdc":0.1,"network":"devnet"}`;
   `curl localhost:3000/ | grep -i chiya` returns the page. Review: PASS (no blockers).
 
-**M2 — Solana Pay QR end-to-end (human door)**
+**M2 — Solana Pay QR end-to-end (human door)** ⏳ CODE COMPLETE + REVIEW: PASS — confirmed-payment step PENDING devnet funding
 - Done when: Pay → POST /api/order → fresh reference Keypair + Solana Pay URL → QR renders;
   real Phantom (devnet) payment flips page to "Order confirmed ☕".
 - Prove: `npm run dev`, scan with Phantom-on-devnet, pay; page text becomes confirmed.
+- Built: src/solana.js (buildPaymentUrl/findPayment/confirmPayment), src/setup.js,
+  POST /api/order + GET /api/order/:id, QR + poll UI, qrcode dep. solana-reviewer: PASS
+  (applied fix: maxSupportedTransactionVersion:0 on validateTransfer).
+- Proven headlessly: POST /api/order → valid URL
+  `solana:<merchant>?amount=0.1&spl-token=4zMMC9…DncDU&reference=<key>&label=ChiyaPay&message=…`
+  + data:image/png QR; poll → `{"status":"pending"}` (real findReference call); unknown → 404.
+- NOT yet proven: the "confirmed" flip + validateTransfer reject-path — BLOCKED because
+  devnet airdrop faucets (public + Helius) are rate-limited/dry and real devnet USDC needs
+  Circle's web faucet. Finish by: (a) user pays via Phantom-on-devnet after `npm run setup`
+  (needs SOL+USDC funded), or (b) re-run the scripted-payment proof when faucets recover.
+  DO NOT mark ✅ until a real devnet tx confirms an order.
 
 **M3 — /api/order returns a correct 402 (agent contract)**
 - Done when: agent request returns HTTP 402 JSON `{recipient, amount, mint,
