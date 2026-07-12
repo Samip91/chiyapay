@@ -65,10 +65,16 @@ Orders + used-signatures kept **in-memory** (Map/Set) — no database.
   (needs SOL+USDC funded), or (b) re-run the scripted-payment proof when faucets recover.
   DO NOT mark ✅ until a real devnet tx confirms an order.
 
-**M3 — /api/order returns a correct 402 (agent contract)**
+**M3 — /api/order returns a correct 402 (agent contract)** ✅ DONE
 - Done when: agent request returns HTTP 402 JSON `{recipient, amount, mint,
   network:"devnet", reference, retryHeader:"X-Payment-Signature"}`.
 - Prove: `curl -i -X POST localhost:$PORT/api/order -H 'X-Agent: 1'` → first line HTTP 402.
+- Proof: `HTTP/1.1 402 Payment Required` with all fields present —
+  `orderId✓ recipient✓ amount=0.1 decimals=6 mint✓ network=devnet reference✓
+  retryHeader=X-Payment-Signature retryUrl=/api/order/<id>/pay`. Human door (no
+  header) still returns 200 + Solana Pay URL + QR. solana-reviewer: PASS (added
+  decimals + retryUrl per its suggestions). No on-chain payment needed for M3.
+- Note: M4 must implement `POST /api/order/:orderId/pay` (verify X-Payment-Signature on-chain).
 
 **M4 — Server-side tx verification**
 - Done when: verify.js checks (1) tx exists / no `meta.err`; (2) recipient token-balance
