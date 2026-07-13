@@ -2,9 +2,10 @@
 //
 // A software agent buys a chiya with no human and no wallet UI:
 //   1. POST /api/order with the X-Agent header → server replies HTTP 402 with a
-//      machine-readable invoice (recipient, amount, mint, reference, retryUrl).
-//   2. The agent pays that invoice in devnet USDC, tagging the transfer with the
-//      order's `reference` so the payment is tied to this order.
+//      machine-readable invoice: recipient, reference, retryUrl, and an `accepts`
+//      list of currencies (USDC and SOL).
+//   2. The agent pays one of them (USDC or SOL — pick with AGENT_CURRENCY),
+//      tagging the transfer with the order's `reference` so it's tied to this order.
 //   3. It re-submits the transaction signature to the retry URL; the server
 //      verifies it on-chain and confirms the order.
 //   4. It prints a Solana Explorer (devnet) link.
@@ -17,6 +18,7 @@ import {
   Connection,
   Keypair,
   PublicKey,
+  SystemProgram,
   Transaction,
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
@@ -31,6 +33,8 @@ import {
 const RPC_URL = process.env.RPC_URL ?? 'https://api.devnet.solana.com';
 const SHOP_URL = process.env.SHOP_URL ?? `http://localhost:${process.env.PORT ?? '3000'}`;
 const KEYPAIR_PATH = process.env.AGENT_KEYPAIR ?? './agent.keypair.json';
+// Which currency the agent pays in: 'usdc' (default) or 'sol'.
+const CURRENCY = (process.env.AGENT_CURRENCY ?? 'usdc').toLowerCase();
 
 // Load the agent's payer wallet, or create + save one (gitignored) on first run.
 function loadOrCreatePayer() {
@@ -46,8 +50,52 @@ function loadOrCreatePayer() {
 const fundingHelp = (pubkey) =>
   `\nFund the agent wallet on DEVNET, then re-run \`npm run agent\`:\n` +
   `  wallet: ${pubkey}\n` +
-  `  SOL  (fees):  https://faucet.solana.com  (paste the address above)\n` +
-  `  USDC (price): https://faucet.circle.com  (select Solana Devnet)\n`;
+  `  SOL  (fees + SOL price):  https://faucet.solana.com  (paste the address above)\n` +
+  `  USDC (USDC price):        https://faucet.circle.com  (select Solana Devnet)\n`;
+
+// Build the payment transaction for the chosen invoice entry. USDC is an SPL
+// transferChecked (creating the merchant's token account if missing); SOL is a
+// native SystemProgram transfer. Either way we append the order `reference` as a
+// read-only key so the payment binds to THIS order (the Solana Pay convention).
+async function buildPaymentTx(connection, payer, entry, recipient, reference) {
+  const tx = new Transaction();
+
+  if (entry.currency === 'SOL') {
+    // Native SOL: amount → lamports using the invoice's own decimals (0.001 × 10^9).
+    const lamports = Math.round(entry.amount * 10 ** entry.decimals);
+    const ix = SystemProgram.transfer({
+      fromPubkey: payer.publicKey,
+      toPubkey: recipient,
+      lamports,
+    });
+    ix.keys.push({ pubkey: reference, isSigner: false, isWritable: false });
+    return tx.add(ix);
+  }
+
+  // USDC (SPL token). Base units from the invoice's decimals (0.1 × 10^6 = 100000).
+  const mint = new PublicKey(entry.mint);
+  const baseUnits = Math.round(entry.amount * 10 ** entry.decimals);
+  const payerAta = await getAssociatedTokenAddress(mint, payer.publicKey);
+  const merchantAta = await getAssociatedTokenAddress(mint, recipient);
+
+  try {
+    await getAccount(connection, merchantAta);
+  } catch (err) {
+    if (err instanceof TokenAccountNotFoundError) {
+      // Merchant has no USDC account yet — the agent pays to create it (idempotent).
+      tx.add(createAssociatedTokenAccountInstruction(payer.publicKey, merchantAta, recipient, mint));
+    } else {
+      throw err;
+    }
+  }
+
+  // transferChecked re-checks the mint + decimals on-chain — safer than a bare transfer.
+  const ix = createTransferCheckedInstruction(
+    payerAta, mint, merchantAta, payer.publicKey, baseUnits, entry.decimals,
+  );
+  ix.keys.push({ pubkey: reference, isSigner: false, isWritable: false });
+  return tx.add(ix);
+}
 
 async function main() {
   const connection = new Connection(RPC_URL, 'confirmed');
@@ -64,12 +112,22 @@ async function main() {
     throw new Error(`expected HTTP 402, got ${orderRes.status}`);
   }
   const invoice = await orderRes.json();
-  console.log(
-    `← 402 Payment Required: pay ${invoice.amount} USDC to ${invoice.recipient}`,
-  );
 
-  // The agent needs SOL for the transaction fee. Check now that we know the
-  // invoice, and bail with a clear message instead of a cryptic RPC error.
+  // Pick the currency to pay in from the invoice's accepted list.
+  const entry = (invoice.accepts ?? []).find((a) => a.currency.toLowerCase() === CURRENCY);
+  if (!entry) {
+    throw new Error(
+      `AGENT_CURRENCY='${CURRENCY}' not offered; accepts: ` +
+        (invoice.accepts ?? []).map((a) => a.currency).join(', '),
+    );
+  }
+  console.log(`← 402 Payment Required: pay ${entry.amount} ${entry.currency} to ${invoice.recipient}`);
+
+  const recipient = new PublicKey(invoice.recipient);
+  const reference = new PublicKey(invoice.reference);
+
+  // The agent needs SOL for the transaction fee (and for the price itself if
+  // paying in SOL). Bail with a clear message instead of a cryptic RPC error.
   const sol = await connection.getBalance(payer.publicKey);
   if (sol === 0) {
     console.error('\nAgent wallet has 0 SOL — cannot pay transaction fees.');
@@ -77,49 +135,10 @@ async function main() {
     process.exit(1);
   }
 
-  // Convert the human amount to base units using the invoice's own decimals, so
-  // there is never an off-by-10^6 guess (0.1 USDC × 10^6 = 100000).
-  const mint = new PublicKey(invoice.mint);
-  const recipient = new PublicKey(invoice.recipient);
-  const reference = new PublicKey(invoice.reference);
-  const baseUnits = Math.round(invoice.amount * 10 ** invoice.decimals);
+  // Step 2 — build the payment transaction for the chosen currency.
+  const tx = await buildPaymentTx(connection, payer, entry, recipient, reference);
 
-  // Step 2 — build the USDC transfer from the agent's token account to the
-  // merchant's. Create the merchant's token account first if it doesn't exist.
-  // The payer's own ATA must already exist (it's where the agent's USDC lives —
-  // the faucet creates it when funding). We only guard the merchant's ATA below.
-  const payerAta = await getAssociatedTokenAddress(mint, payer.publicKey);
-  const merchantAta = await getAssociatedTokenAddress(mint, recipient);
-
-  const tx = new Transaction();
-  try {
-    await getAccount(connection, merchantAta);
-  } catch (err) {
-    if (err instanceof TokenAccountNotFoundError) {
-      // Merchant has no USDC account yet — the agent pays to create it (idempotent).
-      tx.add(
-        createAssociatedTokenAccountInstruction(payer.publicKey, merchantAta, recipient, mint),
-      );
-    } else {
-      throw err;
-    }
-  }
-
-  // transferChecked re-checks the mint + decimals on-chain — safer than a bare
-  // transfer. Then we append the order's `reference` as a read-only key so the
-  // payment is discoverable/bindable to THIS order (the Solana Pay convention).
-  const transferIx = createTransferCheckedInstruction(
-    payerAta,
-    mint,
-    merchantAta,
-    payer.publicKey,
-    baseUnits,
-    invoice.decimals,
-  );
-  transferIx.keys.push({ pubkey: reference, isSigner: false, isWritable: false });
-  tx.add(transferIx);
-
-  console.log('→ paying invoice in devnet USDC …');
+  console.log(`→ paying invoice in devnet ${entry.currency} …`);
   let signature;
   try {
     signature = await sendAndConfirmTransaction(connection, tx, [payer], {
@@ -127,7 +146,7 @@ async function main() {
     });
   } catch (err) {
     console.error(`Payment failed: ${err.message}`);
-    console.error('(Most often: the agent wallet has no devnet USDC.)');
+    console.error(`(Most often: the agent wallet lacks devnet ${entry.currency}.)`);
     console.error(fundingHelp(payer.publicKey.toBase58()));
     process.exit(1);
   }
@@ -157,7 +176,7 @@ async function main() {
   }
 
   // Step 4 — done.
-  console.log('\n✅ Order confirmed ☕');
+  console.log(`\n✅ Order confirmed ☕ (paid in ${result.currency})`);
   console.log(`   ${result.explorer}`);
 }
 

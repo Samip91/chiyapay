@@ -10,8 +10,11 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import QRCode from 'qrcode';
 import { Keypair } from '@solana/web3.js';
-import { PORT, ITEM, PRICE_USDC, NETWORK, MERCHANT, USDC_MINT } from './config.js';
-import { buildPaymentUrl, findPayment, confirmPayment, explorerTx } from './solana.js';
+import {
+  PORT, ITEM, PRICE_USDC, PRICE_SOL, USDC_DECIMALS, SOL_DECIMALS,
+  NETWORK, MERCHANT, USDC_MINT,
+} from './config.js';
+import { buildPaymentUrl, findPayment, explorerTx } from './solana.js';
 import { verifyPayment } from './verify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,9 +27,9 @@ const orders = new Map();
 const app = express();
 app.use(express.json());
 
-// Expose the item + price so the page has no hardcoded values.
+// Expose the item + both prices so the page has no hardcoded values.
 app.get('/api/config', (_req, res) => {
-  res.json({ item: ITEM, priceUsdc: PRICE_USDC, network: NETWORK });
+  res.json({ item: ITEM, priceUsdc: PRICE_USDC, priceSol: PRICE_SOL, network: NETWORK });
 });
 
 // Create an order. Every order gets a fresh reference (a throwaway public key
@@ -38,35 +41,44 @@ app.get('/api/config', (_req, res) => {
 app.post('/api/order', async (req, res) => {
   const orderId = randomUUID();
   const reference = Keypair.generate().publicKey;
-  orders.set(orderId, { reference, status: 'pending', signature: null });
+  orders.set(orderId, { reference, status: 'pending', signature: null, currency: null });
 
-  // Agent door: 402 with the payment "invoice". Amount is in whole USDC; the
-  // mint + recipient tell the agent exactly where and in what token to pay, and
-  // `reference` is the marker to include so the payment can be tied to THIS order.
-  // The agent pays, then retries with the tx signature in `retryHeader` (M4 will
-  // verify it on-chain).
+  // Agent door: 402 with the payment "invoice", advertising BOTH accepted
+  // currencies. `recipient` + `reference` are shared; the agent picks one entry
+  // in `accepts`, pays it (including the reference), then retries with the tx
+  // signature in `retryHeader`. The server verifies whichever currency landed.
   if (req.get('X-Agent')) {
     return res.status(402).json({
       orderId,
       recipient: MERCHANT.toBase58(),
-      amount: PRICE_USDC, // whole USDC…
-      decimals: 6, // …and its decimals, so the agent computes base units unambiguously (0.1 → 100000)
-      mint: USDC_MINT.toBase58(),
       network: NETWORK, // always 'devnet'
       reference: reference.toBase58(),
       retryHeader: 'X-Payment-Signature',
-      retryUrl: `/api/order/${orderId}/pay`, // machine-readable retry path (implemented in M4)
+      retryUrl: `/api/order/${orderId}/pay`,
+      accepts: [
+        // decimals let the agent compute base units unambiguously (avoids the 10^N trap).
+        { currency: 'USDC', amount: PRICE_USDC, decimals: USDC_DECIMALS, mint: USDC_MINT.toBase58() },
+        { currency: 'SOL', amount: PRICE_SOL, decimals: SOL_DECIMALS }, // native SOL, no mint
+      ],
       message:
-        `Pay ${PRICE_USDC} USDC (mint above) to recipient, including the reference, ` +
-        `then retry POST /api/order/${orderId}/pay with header X-Payment-Signature: <signature>.`,
+        `Pay EITHER ${PRICE_USDC} USDC or ${PRICE_SOL} SOL to recipient, including the ` +
+        `reference, then retry POST /api/order/${orderId}/pay with header X-Payment-Signature: <sig>.`,
     });
   }
 
-  // Human door: build the Solana Pay URL and render it as a QR the browser shows.
-  // The private key of the reference is irrelevant — only its public key matters.
-  const url = buildPaymentUrl(reference);
+  // Human door: the customer picked a currency (?currency=usdc|sol). Build that
+  // Solana Pay URL and render it as a QR. The reference's private key is
+  // irrelevant — only its public key matters as a marker.
+  const currency = req.query.currency === 'sol' ? 'sol' : 'usdc';
+  const url = buildPaymentUrl(reference, currency);
   const qr = await QRCode.toDataURL(url.toString()); // data:image/png;base64,...
-  res.json({ orderId, url: url.toString(), qr, amountUsdc: PRICE_USDC });
+  res.json({
+    orderId,
+    url: url.toString(),
+    qr,
+    currency: currency.toUpperCase(),
+    amount: currency === 'sol' ? PRICE_SOL : PRICE_USDC,
+  });
 });
 
 // Poll an order. While unpaid we return "pending". Once a transaction carrying
@@ -81,6 +93,7 @@ app.get('/api/order/:id', async (req, res) => {
     return res.json({
       status: 'confirmed',
       signature: order.signature,
+      currency: order.currency,
       explorer: explorerTx(order.signature),
     });
   }
@@ -89,11 +102,19 @@ app.get('/api/order/:id', async (req, res) => {
     const signature = await findPayment(order.reference);
     if (!signature) return res.json({ status: 'pending' });
 
-    // Found a candidate — verify on-chain before trusting it (never trust find alone).
-    await confirmPayment(signature, order.reference);
+    // Found a candidate — verify on-chain before trusting it (never trust find
+    // alone). verifyPayment accepts either USDC or SOL and reports which landed.
+    const result = await verifyPayment(signature, order.reference);
+    if (!result.ok) return res.json({ status: 'pending', reason: result.reason });
     order.status = 'confirmed';
     order.signature = signature;
-    return res.json({ status: 'confirmed', signature, explorer: explorerTx(signature) });
+    order.currency = result.currency;
+    return res.json({
+      status: 'confirmed',
+      signature,
+      currency: result.currency,
+      explorer: explorerTx(signature),
+    });
   } catch (err) {
     // A found-but-invalid payment (wrong amount/mint) keeps the order pending,
     // with a reason for debugging. Real confirmations simply arrive on a later poll.
@@ -117,6 +138,7 @@ app.post('/api/order/:orderId/pay', async (req, res) => {
     return res.json({
       status: 'confirmed',
       signature: order.signature,
+      currency: order.currency,
       explorer: explorerTx(order.signature),
     });
   }
@@ -134,7 +156,13 @@ app.post('/api/order/:orderId/pay', async (req, res) => {
 
   order.status = 'confirmed';
   order.signature = signature;
-  return res.json({ status: 'confirmed', signature, explorer: explorerTx(signature) });
+  order.currency = result.currency;
+  return res.json({
+    status: 'confirmed',
+    signature,
+    currency: result.currency,
+    explorer: explorerTx(signature),
+  });
 });
 
 // Serve the shop page and static assets from /public.

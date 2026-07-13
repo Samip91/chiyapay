@@ -5,26 +5,26 @@
 // we VALIDATE it actually paid the right merchant, mint, and amount. The
 // reference is the thread that ties an anonymous on-chain transfer back to our
 // specific order.
-import {
-  encodeURL,
-  findReference,
-  validateTransfer,
-  FindReferenceError,
-} from '@solana/pay';
-import { connection, MERCHANT, USDC_MINT, AMOUNT, ITEM } from './config.js';
+import { encodeURL, findReference, FindReferenceError } from '@solana/pay';
+import { connection, MERCHANT, USDC_MINT, AMOUNT, AMOUNT_SOL, ITEM } from './config.js';
 
 // Build the Solana Pay request URL a wallet (Phantom) can open/scan.
 // `reference` is a throwaway public key unique to this order — it carries no
 // funds, it's just a searchable marker the wallet includes in the transaction.
-export function buildPaymentUrl(reference) {
-  return encodeURL({
+// `currency` picks the token: 'usdc' sets splToken (an SPL transfer), 'sol'
+// omits it (a native SOL transfer). The amount is the whole-token price for that
+// currency; @solana/pay applies the right decimals.
+export function buildPaymentUrl(reference, currency = 'usdc') {
+  const common = {
     recipient: MERCHANT,
-    amount: AMOUNT, // whole USDC; @solana/pay applies the mint's 6 decimals
-    splToken: USDC_MINT, // pay in USDC, not SOL
     reference, // lets us find this exact payment later
     label: 'ChiyaPay',
     message: `One ${ITEM.name} ${ITEM.emoji}`,
-  });
+  };
+  if (currency === 'sol') {
+    return encodeURL({ ...common, amount: AMOUNT_SOL }); // no splToken → native SOL
+  }
+  return encodeURL({ ...common, amount: AMOUNT, splToken: USDC_MINT }); // USDC
 }
 
 // Look for a settled transaction that carries this order's reference.
@@ -42,23 +42,9 @@ export async function findPayment(reference) {
   }
 }
 
-// Server-side verification — NEVER trust that a found signature actually paid us.
-// validateTransfer re-checks on-chain that this signature transferred exactly
-// AMOUNT of USDC_MINT to MERCHANT and carries our reference. Throws on any
-// mismatch (wrong amount, wrong mint, wrong recipient); the caller treats a
-// throw as "not confirmed".
-export async function confirmPayment(signature, reference) {
-  // maxSupportedTransactionVersion: 0 is required — validateTransfer forwards
-  // these opts to getTransaction, which throws on a versioned (v0) tx otherwise.
-  // Without it a v0 payment would silently never confirm.
-  await validateTransfer(
-    connection,
-    signature,
-    { recipient: MERCHANT, amount: AMOUNT, splToken: USDC_MINT, reference },
-    { commitment: 'confirmed', maxSupportedTransactionVersion: 0 },
-  );
-  return signature;
-}
+// NOTE: server-side verification of a found/submitted signature lives in
+// verify.js (verifyPayment), shared by both doors. It accepts payment in EITHER
+// USDC or SOL, so we don't need a currency-specific validateTransfer here.
 
 // A clickable devnet explorer link for any signature.
 export function explorerTx(signature) {
