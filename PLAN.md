@@ -131,10 +131,15 @@ Orders + used-signatures kept **in-memory** (Map/Set) — no database.
   (tx 3cKczGjJ…); agent SOL → confirmed (tx VxdzecZz…); human USDC → confirmed; human
   SOL → confirmed (scripted payment carrying the reference, poll flips).
 
-**M6 — README + polish**
+**M6 — README + polish** ✅ DONE
 - Done when: stranger can run setup → dev (scan QR) → agent in <5 min; `.env.example`
   complete; faucet fallback documented; every file commented with its purpose.
 - Prove: follow README on a clean checkout; both demos pass.
+- Built: README.md (quickstart, both demos, dual-currency, the QR tap-to-open tip +
+  reference caveat, verification explainer, 402 handshake, project layout,
+  troubleshooting) + SUBMISSION.md blurb. solana-reviewer fact-check: ACCURATE (fixed
+  one button label 0.10→0.1). All commands/env vars/JSON verified against live code;
+  both demos already proven on real devnet (M2/M5/M7).
 
 **Gate:** run `/review` then `/qa` after each milestone before marking it done.
 
