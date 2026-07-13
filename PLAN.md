@@ -93,11 +93,23 @@ Orders + used-signatures kept **in-memory** (Map/Set) — no database.
   faucet is web-only). Finish when faucets recover / a wallet is funded. DO NOT mark ✅ until
   a real payment confirms an order and a reused/underpaid sig is rejected on-chain.
 
-**M5 — Agent script full flow**
+**M5 — Agent script full flow** ⏳ CODE COMPLETE + REVIEW: PASS — full pay→confirm PENDING devnet funding
 - Done when: `npm run agent` does 402 → send USDC transfer (create ATA if needed) →
   resubmit with X-Payment-Signature → confirmed → prints
   `explorer.solana.com/tx/<sig>?cluster=devnet`.
 - Prove: `npm run agent` exits 0 and prints a resolving devnet explorer link.
+- Built: src/agent.js — loads/creates a gitignored payer keypair, POSTs /api/order
+  (X-Agent) → parses the 402 invoice → builds a transferChecked of 0.1 USDC to the
+  merchant with the order `reference` appended (creates merchant ATA if missing) →
+  retries the /pay endpoint with the signature (bounded retry on devnet "not found"
+  lag) → prints the devnet explorer link. solana-reviewer: PASS (added the retry loop).
+- Proven headlessly: `npm run agent` boots, receives HTTP 402, correctly parses
+  "pay 0.1 USDC to <merchant>", detects 0 SOL, prints funding instructions, exits 1.
+- NOT yet proven: the actual pay → confirmed → explorer link — BLOCKED, needs the
+  agent wallet funded with devnet SOL (faucet.solana.com) + devnet USDC
+  (faucet.circle.com). Once funded, `npm run agent` completes and this SAME real
+  payment also closes M2 (QR flip) and M4 (confirm/underpay/replay) on-chain proofs.
+  DO NOT mark ✅ until it prints a resolving explorer link.
 
 **M6 — README + polish**
 - Done when: stranger can run setup → dev (scan QR) → agent in <5 min; `.env.example`
