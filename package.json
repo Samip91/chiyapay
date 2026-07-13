@@ -1,0 +1,24 @@
+{
+  "name": "chiyapay",
+  "version": "1.0.0",
+  "description": "USDC checkout for a Nepali tea stall on Solana devnet — human QR door + agent HTTP 402 door.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "node src/server.js",
+    "agent": "node src/agent.js",
+    "setup": "node src/setup.js"
+  },
+  "dependencies": {
+    "@solana/pay": "^0.2.5",
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.98.0",
+    "bignumber.js": "^9.1.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

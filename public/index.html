@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ChiyaPay — Tea Stall Checkout</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      margin: 0; min-height: 100vh;
+      display: grid; place-items: center;
+      background: #f4efe6;
+      color: #2b2118;
+    }
+    .card {
+      background: #fff; border-radius: 20px; padding: 2rem;
+      width: min(92vw, 380px); text-align: center;
+      box-shadow: 0 12px 40px rgba(0,0,0,.12);
+    }
+    .emoji { font-size: 4rem; line-height: 1; margin: .25rem 0; }
+    h1 { margin: .25rem 0 .1rem; font-size: 1.5rem; }
+    .price { font-size: 2rem; font-weight: 700; margin: .5rem 0 0; }
+    .price small { font-size: 1rem; font-weight: 500; color: #7a6a55; }
+    .net {
+      display: inline-block; margin-top: .4rem; padding: .15rem .6rem;
+      font-size: .72rem; letter-spacing: .04em; text-transform: uppercase;
+      background: #ece3d2; color: #7a6a55; border-radius: 999px;
+    }
+    .buttons { display: flex; gap: .6rem; margin-top: 1.5rem; }
+    button {
+      flex: 1; padding: .9rem;
+      font-size: 1.02rem; font-weight: 600; color: #fff;
+      background: #b5651d; border: 0; border-radius: 12px; cursor: pointer;
+    }
+    button.sol { background: #5b4bc4; }
+    button:hover { filter: brightness(1.08); }
+    button:disabled { opacity: .5; cursor: default; }
+    #status { margin-top: 1rem; min-height: 1.2rem; color: #7a6a55; font-size: .9rem; }
+    #qr { margin-top: 1.25rem; }
+    #qr img { width: 240px; height: 240px; border-radius: 12px; background: #fff; }
+    #qr p { margin: .6rem 0 0; font-size: .82rem; color: #7a6a55; }
+    #openWallet {
+      display: inline-block; margin-top: .5rem; padding: .5rem .9rem;
+      font-size: .85rem; font-weight: 600; text-decoration: none;
+      color: #fff; background: #5b4bc4; border-radius: 10px;
+    }
+    .confirmed { color: #2e7d32; font-weight: 700; font-size: 1.35rem; }
+    .confirmed a { display: block; margin-top: .6rem; font-size: .85rem; }
+    [hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="emoji" id="emoji">☕</div>
+    <h1 id="item">Loading…</h1>
+    <p class="price">Pay in USDC or SOL</p>
+    <span class="net" id="net">devnet</span>
+    <div class="buttons" id="buttons">
+      <button id="payUsdc">Pay <span id="priceUsdc">—</span> USDC</button>
+      <button id="paySol" class="sol">Pay <span id="priceSol">—</span> SOL</button>
+    </div>
+    <div id="qr" hidden>
+      <img id="qrImg" alt="Solana Pay QR code" />
+      <p>Scan with a Solana Pay wallet (Devnet).</p>
+      <a id="openWallet" href="#">On this phone? Tap to open in your wallet →</a>
+    </div>
+    <p id="status"></p>
+  </main>
+
+  <script>
+    // M2: the human door. Clicking Pay creates an order, shows its Solana Pay QR,
+    // then polls the server until the payment is confirmed on-chain.
+    const $ = (id) => document.getElementById(id);
+    let pollTimer = null;
+
+    async function load() {
+      try {
+        const cfg = await (await fetch('/api/config')).json();
+        $('emoji').textContent = cfg.item.emoji;
+        $('item').textContent = cfg.item.name;
+        $('priceUsdc').textContent = cfg.priceUsdc;
+        $('priceSol').textContent = cfg.priceSol;
+        $('net').textContent = cfg.network;
+        document.title = 'ChiyaPay — ' + cfg.item.name;
+      } catch (e) {
+        $('status').textContent = 'Could not load shop config.';
+      }
+    }
+
+    // Create an order in the chosen currency, show its QR, then poll.
+    async function pay(currency) {
+      $('payUsdc').disabled = true;
+      $('paySol').disabled = true;
+      $('status').textContent = 'Creating order…';
+      try {
+        const order = await (await fetch('/api/order?currency=' + currency, { method: 'POST' })).json();
+        $('qrImg').src = order.qr;      // server-rendered QR data URL
+        // Same Solana Pay URL as a tappable link — on a phone this opens the
+        // wallet's Solana Pay flow (which keeps the reference), unlike scanning
+        // the QR into a wallet's "send to address" field (which drops it).
+        $('openWallet').href = order.url;
+        $('qr').hidden = false;
+        $('status').textContent = 'Waiting for ' + order.currency + ' payment…';
+        poll(order.orderId);
+      } catch (e) {
+        $('status').textContent = 'Could not create order.';
+        $('payUsdc').disabled = false;
+        $('paySol').disabled = false;
+      }
+    }
+
+    // Poll the order every 2.5s. When the server reports "confirmed", swap the
+    // card to the success state with a devnet explorer link. Give up after ~5 min
+    // so an unpaid order (or a dead server) shows a clear message instead of
+    // spinning forever.
+    function poll(orderId) {
+      let attempts = 0;
+      const maxAttempts = 120; // 120 * 2.5s = 5 minutes
+      pollTimer = setInterval(async () => {
+        if (++attempts > maxAttempts) {
+          clearInterval(pollTimer);
+          $('status').textContent = 'Payment not detected — try again.';
+          $('qr').hidden = true;
+          $('payUsdc').disabled = false;
+          $('paySol').disabled = false;
+          return;
+        }
+        try {
+          const r = await (await fetch('/api/order/' + orderId)).json();
+          if (r.status === 'confirmed') {
+            clearInterval(pollTimer);
+            $('qr').hidden = true;
+            $('buttons').hidden = true;
+            $('status').innerHTML =
+              '<span class="confirmed">Order confirmed ☕ (' + (r.currency || '') + ')' +
+              '<a href="' + r.explorer + '" target="_blank" rel="noreferrer">View on Solana Explorer</a></span>';
+          }
+        } catch (e) { /* transient poll error — keep trying */ }
+      }, 2500);
+    }
+
+    $('payUsdc').addEventListener('click', () => pay('usdc'));
+    $('paySol').addEventListener('click', () => pay('sol'));
+    load();
+  </script>
+</body>
+</html>
