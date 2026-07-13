@@ -14,11 +14,6 @@ devnet** (a free test network — no real money).
 > ⚠️ **Devnet only.** This project never touches mainnet and never handles real
 > funds. Every coin here is free test money.
 
-## Demo video
-
-<!-- TODO: paste 60–90s demo video link here before submitting -->
-**TODO — add the 60–90 second demo video link here.**
-
 ## The two doors
 
 ```
