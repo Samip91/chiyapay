@@ -27,17 +27,24 @@
       font-size: .72rem; letter-spacing: .04em; text-transform: uppercase;
       background: #ece3d2; color: #7a6a55; border-radius: 999px;
     }
+    .buttons { display: flex; gap: .6rem; margin-top: 1.5rem; }
     button {
-      margin-top: 1.5rem; width: 100%; padding: .9rem;
-      font-size: 1.05rem; font-weight: 600; color: #fff;
+      flex: 1; padding: .9rem;
+      font-size: 1.02rem; font-weight: 600; color: #fff;
       background: #b5651d; border: 0; border-radius: 12px; cursor: pointer;
     }
-    button:hover { background: #9c531a; }
+    button.sol { background: #5b4bc4; }
+    button:hover { filter: brightness(1.08); }
     button:disabled { opacity: .5; cursor: default; }
     #status { margin-top: 1rem; min-height: 1.2rem; color: #7a6a55; font-size: .9rem; }
     #qr { margin-top: 1.25rem; }
     #qr img { width: 240px; height: 240px; border-radius: 12px; background: #fff; }
     #qr p { margin: .6rem 0 0; font-size: .82rem; color: #7a6a55; }
+    #openWallet {
+      display: inline-block; margin-top: .5rem; padding: .5rem .9rem;
+      font-size: .85rem; font-weight: 600; text-decoration: none;
+      color: #fff; background: #5b4bc4; border-radius: 10px;
+    }
     .confirmed { color: #2e7d32; font-weight: 700; font-size: 1.35rem; }
     .confirmed a { display: block; margin-top: .6rem; font-size: .85rem; }
     [hidden] { display: none; }
@@ -47,12 +54,16 @@
   <main class="card">
     <div class="emoji" id="emoji">☕</div>
     <h1 id="item">Loading…</h1>
-    <p class="price"><span id="price">—</span> <small>USDC</small></p>
+    <p class="price">Pay in USDC or SOL</p>
     <span class="net" id="net">devnet</span>
-    <button id="pay">Pay with USDC</button>
+    <div class="buttons" id="buttons">
+      <button id="payUsdc">Pay <span id="priceUsdc">—</span> USDC</button>
+      <button id="paySol" class="sol">Pay <span id="priceSol">—</span> SOL</button>
+    </div>
     <div id="qr" hidden>
       <img id="qrImg" alt="Solana Pay QR code" />
-      <p>Scan with Phantom (set to Devnet) to pay.</p>
+      <p>Scan with a Solana Pay wallet (Devnet).</p>
+      <a id="openWallet" href="#">On this phone? Tap to open in your wallet →</a>
     </div>
     <p id="status"></p>
   </main>
@@ -68,7 +79,8 @@
         const cfg = await (await fetch('/api/config')).json();
         $('emoji').textContent = cfg.item.emoji;
         $('item').textContent = cfg.item.name;
-        $('price').textContent = cfg.priceUsdc.toFixed(2);
+        $('priceUsdc').textContent = cfg.priceUsdc;
+        $('priceSol').textContent = cfg.priceSol;
         $('net').textContent = cfg.network;
         document.title = 'ChiyaPay — ' + cfg.item.name;
       } catch (e) {
@@ -76,18 +88,25 @@
       }
     }
 
-    async function pay() {
-      $('pay').disabled = true;
+    // Create an order in the chosen currency, show its QR, then poll.
+    async function pay(currency) {
+      $('payUsdc').disabled = true;
+      $('paySol').disabled = true;
       $('status').textContent = 'Creating order…';
       try {
-        const order = await (await fetch('/api/order', { method: 'POST' })).json();
+        const order = await (await fetch('/api/order?currency=' + currency, { method: 'POST' })).json();
         $('qrImg').src = order.qr;      // server-rendered QR data URL
+        // Same Solana Pay URL as a tappable link — on a phone this opens the
+        // wallet's Solana Pay flow (which keeps the reference), unlike scanning
+        // the QR into a wallet's "send to address" field (which drops it).
+        $('openWallet').href = order.url;
         $('qr').hidden = false;
-        $('status').textContent = 'Waiting for payment…';
+        $('status').textContent = 'Waiting for ' + order.currency + ' payment…';
         poll(order.orderId);
       } catch (e) {
         $('status').textContent = 'Could not create order.';
-        $('pay').disabled = false;
+        $('payUsdc').disabled = false;
+        $('paySol').disabled = false;
       }
     }
 
@@ -101,9 +120,10 @@
       pollTimer = setInterval(async () => {
         if (++attempts > maxAttempts) {
           clearInterval(pollTimer);
-          $('status').textContent = 'Payment not detected — click Pay to try again.';
+          $('status').textContent = 'Payment not detected — try again.';
           $('qr').hidden = true;
-          $('pay').disabled = false;
+          $('payUsdc').disabled = false;
+          $('paySol').disabled = false;
           return;
         }
         try {
@@ -111,16 +131,17 @@
           if (r.status === 'confirmed') {
             clearInterval(pollTimer);
             $('qr').hidden = true;
-            $('pay').hidden = true;
+            $('buttons').hidden = true;
             $('status').innerHTML =
-              '<span class="confirmed">Order confirmed ☕' +
+              '<span class="confirmed">Order confirmed ☕ (' + (r.currency || '') + ')' +
               '<a href="' + r.explorer + '" target="_blank" rel="noreferrer">View on Solana Explorer</a></span>';
           }
         } catch (e) { /* transient poll error — keep trying */ }
       }, 2500);
     }
 
-    $('pay').addEventListener('click', pay);
+    $('payUsdc').addEventListener('click', () => pay('usdc'));
+    $('paySol').addEventListener('click', () => pay('sol'));
     load();
   </script>
 </body>

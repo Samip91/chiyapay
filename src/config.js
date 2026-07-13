@@ -2,7 +2,7 @@
 // the Solana devnet chain objects, so no other file has to reach into
 // process.env or re-create a Connection.
 import 'dotenv/config';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import BigNumber from 'bignumber.js';
 
 // The one product this stall sells.
@@ -50,4 +50,20 @@ export const USDC_MINT = new PublicKey(
 // pass PRICE_USDC directly, NOT PRICE_BASE_UNITS. PRICE_BASE_UNITS stays the
 // single source of truth for any raw base-unit math (used in M4's balance check).
 export const AMOUNT = new BigNumber(PRICE_USDC);
+
+// --- SOL price (M7: the shop also accepts native SOL) ---
+// A fixed, tiny devnet amount — no FX feed (keep-it-boring rule). SOL has 9
+// decimals: 1 SOL = 10^9 lamports, so 0.001 SOL = 1,000,000 lamports. As with
+// USDC, we compute the base unit (lamports) ONCE so it lives in a single place.
+export const SOL_DECIMALS = 9; // 1 SOL = 10^9 lamports
+export const PRICE_SOL = Number(process.env.PRICE_SOL ?? '0.001');
+export const PRICE_SOL_LAMPORTS = Math.round(PRICE_SOL * LAMPORTS_PER_SOL);
+// Solana Pay takes the SOL amount in WHOLE SOL as a BigNumber (no splToken).
+export const AMOUNT_SOL = new BigNumber(PRICE_SOL);
+
+// The two currencies the shop accepts, keyed by the code used across the app.
+export const CURRENCIES = {
+  usdc: { code: 'usdc', label: 'USDC', amount: PRICE_USDC },
+  sol: { code: 'sol', label: 'SOL', amount: PRICE_SOL },
+};
 

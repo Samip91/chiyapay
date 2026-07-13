@@ -49,7 +49,7 @@ Orders + used-signatures kept **in-memory** (Map/Set) — no database.
   `curl localhost:3000/api/config` → `{"item":{"name":"Nepali Milk Chiya","emoji":"☕"},"priceUsdc":0.1,"network":"devnet"}`;
   `curl localhost:3000/ | grep -i chiya` returns the page. Review: PASS (no blockers).
 
-**M2 — Solana Pay QR end-to-end (human door)** ⏳ CODE COMPLETE + REVIEW: PASS — confirmed-payment step PENDING devnet funding
+**M2 — Solana Pay QR end-to-end (human door)** ✅ DONE (proven on real devnet)
 - Done when: Pay → POST /api/order → fresh reference Keypair + Solana Pay URL → QR renders;
   real Phantom (devnet) payment flips page to "Order confirmed ☕".
 - Prove: `npm run dev`, scan with Phantom-on-devnet, pay; page text becomes confirmed.
@@ -59,11 +59,9 @@ Orders + used-signatures kept **in-memory** (Map/Set) — no database.
 - Proven headlessly: POST /api/order → valid URL
   `solana:<merchant>?amount=0.1&spl-token=4zMMC9…DncDU&reference=<key>&label=ChiyaPay&message=…`
   + data:image/png QR; poll → `{"status":"pending"}` (real findReference call); unknown → 404.
-- NOT yet proven: the "confirmed" flip + validateTransfer reject-path — BLOCKED because
-  devnet airdrop faucets (public + Helius) are rate-limited/dry and real devnet USDC needs
-  Circle's web faucet. Finish by: (a) user pays via Phantom-on-devnet after `npm run setup`
-  (needs SOL+USDC funded), or (b) re-run the scripted-payment proof when faucets recover.
-  DO NOT mark ✅ until a real devnet tx confirms an order.
+- PROOF (real devnet): human-door order → scripted payment carrying the order reference →
+  poll flips to `confirmed` — for BOTH USDC and SOL (findReference + verifyPayment, the exact
+  path a Phantom scan triggers). Also confirmed live via the agent door's 0.10 USDC payment.
 
 **M3 — /api/order returns a correct 402 (agent contract)** ✅ DONE
 - Done when: agent request returns HTTP 402 JSON `{recipient, amount, mint,
@@ -76,7 +74,11 @@ Orders + used-signatures kept **in-memory** (Map/Set) — no database.
   decimals + retryUrl per its suggestions). No on-chain payment needed for M3.
 - Note: M4 must implement `POST /api/order/:orderId/pay` (verify X-Payment-Signature on-chain).
 
-**M4 — Server-side tx verification** ⏳ CODE COMPLETE + REVIEW: PASS — confirm/underpay/replay paths PENDING devnet funding
+**M4 — Server-side tx verification** ✅ DONE (all paths proven on real devnet)
+- PROOF (one funded server session): known-good sig → `200 confirmed`; replay same
+  sig → `402 "signature already used"`; underpay 0.05 → `402 "underpaid: merchant
+  received 50000 base units, need 100000"`. Base-unit math correct (0.05→50000,
+  0.10→100000). Plus reject paths vs real chain reads (missing/garbage/unrelated → 402).
 - Done when: verify.js checks (1) tx exists / no `meta.err`; (2) recipient token-balance
   delta ≥ price AND mint matches; (3) blockTime within ~10 min; (4) signature not reused.
   Fail → 402 + reason.
@@ -93,7 +95,11 @@ Orders + used-signatures kept **in-memory** (Map/Set) — no database.
   faucet is web-only). Finish when faucets recover / a wallet is funded. DO NOT mark ✅ until
   a real payment confirms an order and a reused/underpaid sig is rejected on-chain.
 
-**M5 — Agent script full flow** ⏳ CODE COMPLETE + REVIEW: PASS — full pay→confirm PENDING devnet funding
+**M5 — Agent script full flow** ✅ DONE (real devnet payment)
+- PROOF (funded devnet run): `npm run agent` exit 0 →
+  `✅ Order confirmed ☕` →
+  https://explorer.solana.com/tx/3K5i6ZUPPmGTC1tNTFqv4iVeVhfgC1rb8YWUoLh75efTwVVzPwYRymsTGG4wsrReDwdGVYPDcn38oUR6JpiVaFFN?cluster=devnet
+  (tx Finalized on-chain; merchant received 0.10 USDC). solana-reviewer: PASS.
 - Done when: `npm run agent` does 402 → send USDC transfer (create ATA if needed) →
   resubmit with X-Payment-Signature → confirmed → prints
   `explorer.solana.com/tx/<sig>?cluster=devnet`.
@@ -110,6 +116,20 @@ Orders + used-signatures kept **in-memory** (Map/Set) — no database.
   (faucet.circle.com). Once funded, `npm run agent` completes and this SAME real
   payment also closes M2 (QR flip) and M4 (confirm/underpay/replay) on-chain proofs.
   DO NOT mark ✅ until it prints a resolving explorer link.
+
+**M7 — Dual-currency (SOL + USDC)** ✅ DONE (proven on real devnet) — added after M5 by request
+- Scope: the shop accepts BOTH USDC (0.10) and native SOL (0.001), on BOTH doors;
+  customer/agent picks. Fixed SOL price (no FX feed). Touches config, solana, verify,
+  server, index.html, agent.
+- Built: config PRICE_SOL/PRICE_SOL_LAMPORTS/SOL_DECIMALS; buildPaymentUrl(reference,
+  currency) (SOL omits splToken); verifyPayment accepts USDC token-delta OR SOL
+  lamport-delta ≥ price (unified across both doors); 402 `accepts:[USDC,SOL]`; two
+  shop buttons; agent AGENT_CURRENCY picks SOL/USDC (SystemProgram.transfer vs
+  transferChecked). solana-reviewer: PASS (no blockers; verified no cross-currency
+  false-positive, replay/reference/recency intact).
+- PROOF (all real devnet, funded wallet): 402 advertises both; agent USDC → confirmed
+  (tx 3cKczGjJ…); agent SOL → confirmed (tx VxdzecZz…); human USDC → confirmed; human
+  SOL → confirmed (scripted payment carrying the reference, poll flips).
 
 **M6 — README + polish**
 - Done when: stranger can run setup → dev (scan QR) → agent in <5 min; `.env.example`
